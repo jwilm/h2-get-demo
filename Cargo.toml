@@ -1,0 +1,14 @@
+[package]
+name = "h2-get-demo"
+version = "0.1.0"
+authors = ["Joe Wilm <joe@jwilm.com>"]
+
+[dependencies]
+h2 = { git = 'https://github.com/carllerche/h2' }
+openssl = { version = "0.9", features = ["v102"] }
+tokio-openssl = "0.1"
+trust-dns-resolver = "0.7"
+tokio-core = "*"
+futures = "*"
+failure = "0.1"
+http = "*"
