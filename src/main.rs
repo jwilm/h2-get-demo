@@ -22,17 +22,18 @@ use std::collections::VecDeque;
 use std::net::{SocketAddr, IpAddr};
 
 use futures::{Poll, Future, Stream, Async};
+use futures::future::{Either, FutureResult};
 
 use h2::RecvStream;
 
 use http::*;
 
-use openssl::ssl::{SslMethod, SslConnectorBuilder};
+use openssl::ssl::{self, SslMethod, SslConnectorBuilder};
 
 use tokio_core::net::{TcpStream, TcpStreamNew};
 use tokio_core::reactor::{Core, Handle};
 
-use tokio_openssl::SslConnectorExt;
+use tokio_openssl::{SslConnectorExt, SslStream, ConnectAsync};
 
 use trust_dns_resolver::ResolverFuture;
 use trust_dns_resolver::config::*;
@@ -58,16 +59,7 @@ fn main() {
         // Now try establishing a TCP connection to each resolved address
         .and_then(|ips| ConnectLoop::new(ips, 443, &handle).map_err(Error::Tcp))
         // Add TLS to the TCP stream
-        .and_then(|stream| {
-            // TODO how to handle these "immediate" errors?
-            let mut builder = SslConnectorBuilder::new(SslMethod::tls()).unwrap();
-            builder.set_alpn_protocols(&[b"h2"]).unwrap();
-            builder
-                .build()
-                // The domain name is important here for SNI
-                .connect_async("nghttp2.org", stream)
-                .map_err(Error::Ssl)
-        })
+        .and_then(|stream| tls(stream, "nghttp2.org").map_err(Error::Ssl))
         // Establish h2 on the ssl stream
         .and_then(|ssl_stream| {
             ::h2::client::handshake(ssl_stream)
@@ -114,6 +106,34 @@ fn main() {
 
     // And print the result
     println!("{}", String::from_utf8(response).unwrap());
+}
+
+/// Helper when returning an `Either` future where the B variant is an immediate Error.
+macro_rules! either_try {
+    ($res:expr) => {
+        match $res {
+            Ok(v) => v,
+            Err(e) => return ::futures::future::Either::B(
+                ::futures::future::err(::std::convert::From::from(e))
+            )
+        }
+    }
+}
+
+/// Wrap a TcpStream with TLS
+fn tls(stream: TcpStream, host: &str)
+    // `impl Future<Item=SslStream<TcpStream>, Error=ssl::Error>`
+    -> Either<ConnectAsync<TcpStream>, FutureResult<SslStream<TcpStream>, ssl::Error>>
+{
+    let mut builder = either_try!(SslConnectorBuilder::new(SslMethod::tls()));
+    either_try!(builder.set_alpn_protocols(&[b"h2"]));
+
+    let connect_async = builder
+        .build()
+        // The domain name is important here for SNI
+        .connect_async(host, stream);
+
+    Either::A(connect_async)
 }
 
 /// An error resulting from establishing a TCP connection from a list of IpAddr.
